@@ -699,7 +699,7 @@ def build_symbol_candle_option(
             "symbol": "none",
             "silent": True,
             "animation": False,
-            "lineStyle": {"color": "#ffb84d", "type": "dashed", "width": 2},
+            "lineStyle": {"color": "#ffb84d", "type": [4, 12], "width": 2},
             "label": {
                 "formatter": "信号",
                 "color": "#ffb84d",

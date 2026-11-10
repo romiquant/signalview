@@ -133,3 +133,18 @@ def test_boll_values_match_manual_calculation() -> None:
         assert np.isclose(prep["_boll_mid"].iloc[i], m)
         assert np.isclose(prep["_boll_upper"].iloc[i], m + 2 * s)
         assert np.isclose(prep["_boll_lower"].iloc[i], m - 2 * s)
+
+
+def test_signal_mark_line_gap_is_longer_than_the_dash() -> None:
+    option = build_symbol_candle_option(
+        title="t",
+        labels=["2026-08-05 10:30"],
+        ohlc=[[10.0, 11.0, 9.0, 10.5]],
+        volume=[],
+        ma_lines=[],
+        macd=None,
+        has_volume=False,
+        mark_date="2026-08-05 10:30",
+    )
+    dash = option["series"][0]["markLine"]["lineStyle"]["type"]
+    assert dash[1] > dash[0] * 2

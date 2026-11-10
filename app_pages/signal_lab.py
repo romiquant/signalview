@@ -239,11 +239,19 @@ def _show_case_dialog(cases_lookup: dict[str, dict]) -> None:
         else:
             st.info("K 线数据暂不可用（标的代码无法解析或数据源无此合约）。")
     shown = case["at"].replace("-", ".") if case.get("at") else when
+    marks = _saved_marks(case)
     with right:
         head = st.container(horizontal=True, vertical_alignment="center")
         with head:
-            st.markdown(f"#### {case['name']}", width="stretch")
-            if editable and st.button(
+            st.markdown(
+                f"#### {case['name']}",
+                width="content" if marks else "stretch",
+            )
+            if "PICK" in marks:
+                st.badge("PICK", color="green")
+            if "BAN" in marks:
+                st.badge("BAN", color="red")
+            if not marks and editable and st.button(
                 "删除",
                 icon=":material/delete:",
                 type="tertiary",
@@ -251,7 +259,7 @@ def _show_case_dialog(cases_lookup: dict[str, dict]) -> None:
             ):
                 st.session_state["sl_confirm_delete"] = case["id"]
                 st.rerun(scope="fragment")
-            elif st.session_state.get("sl_case_save"):
+            elif not marks and st.session_state.get("sl_case_save"):
                 _save_trade_button(case)
         if editable and st.session_state.get("sl_confirm_delete") == case["id"]:
             st.warning(f"删除「{case['name']}」后不能恢复。")
@@ -468,6 +476,47 @@ def case_signal_for_save(action: str, trade_signal: str) -> str:
     return cleaned or "BUY"
 
 
+def _bar_key(text: str) -> tuple[str, str]:
+    """案例时间 -> (日期, 时分)。只有日期时分钟为空。"""
+    raw = str(text or "").strip().replace(".", "-").replace("T", " ")
+    date = raw[:10]
+    clock = raw[11:16] if len(raw) >= 16 and raw[10] == " " else ""
+    return date, clock
+
+
+def saved_trade_marks(trade: dict, library: list[dict]) -> list[str]:
+    """这条成交在案例库里已经记过的动作。标的、策略、分钟都要对上。
+
+    与成交方向相同记 PICK，NOT_BUY 记 BAN。IGNORE_BUY 这类其他信号不算。
+    两种都有时顺序固定为 PICK、BAN。
+    """
+    code = str(trade.get("code") or "").strip()
+    strategy = str(trade.get("strategy") or "").strip()
+    when = _bar_key(trade.get("at") or trade.get("date") or "")
+    if not code or not strategy or not when[0]:
+        return []
+    pick_signal = case_signal_for_save("pick", str(trade.get("signal") or ""))
+    found: set[str] = set()
+    for item in library:
+        if str(item.get("code") or "").strip() != code:
+            continue
+        if str(item.get("strategy") or "").strip() != strategy:
+            continue
+        if _bar_key(item.get("at") or item.get("date") or "") != when:
+            continue
+        signal = str(item.get("signal") or "").strip().upper()
+        if signal == "NOT_BUY":
+            found.add("BAN")
+        elif signal == pick_signal:
+            found.add("PICK")
+    marks: list[str] = []
+    if "PICK" in found:
+        marks.append("PICK")
+    if "BAN" in found:
+        marks.append("BAN")
+    return marks
+
+
 def _save_trade_button(case: dict) -> None:
     """回测详情标题旁的 pick / ban，样式与案例详情的删除按钮一致。"""
     saved = st.session_state.get(f"sl_saved_{case['id']}")
@@ -514,6 +563,29 @@ def _save_trade_notice(case: dict) -> None:
     saved = st.session_state.get(f"sl_saved_{case['id']}")
     if saved and saved[0] == "err":
         st.error(saved[1])
+
+
+def _saved_marks(case: dict) -> list[str]:
+    """回测详情里，这条成交已经 pick / ban 过时返回标记。"""
+    if not st.session_state.get("sl_case_save"):
+        return []
+    library: list[dict] = []
+    try:
+        library = d.get_cases()
+    except ValueError:
+        library = []
+    marks = saved_trade_marks(case, library)
+    if marks:
+        return marks
+    saved = st.session_state.get(f"sl_saved_{case['id']}")
+    if not saved or saved[0] != "ok":
+        return []
+    text = str(saved[1])
+    if "ban" in text:
+        return ["BAN"]
+    if "pick" in text:
+        return ["PICK"]
+    return []
 
 
 def render_case_gallery(

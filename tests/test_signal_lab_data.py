@@ -47,6 +47,59 @@ def test_case_signal_for_save_splits_pick_and_ban():
     assert case_signal_for_save("ban", "SELL") == "NOT_BUY"
 
 
+def test_saved_trade_marks_show_pick_or_ban_for_the_same_bar():
+    from app_pages.signal_lab import saved_trade_marks
+
+    trade = {
+        "code": "as:600641:1h",
+        "strategy": "xd3_prevlow",
+        "signal": "BUY",
+        "at": "2026-08-05 10:30",
+        "date": "2026-08-05",
+    }
+    library = [
+        {
+            "code": "as:600641:1h",
+            "strategy": "xd3_prevlow",
+            "signal": "BUY",
+            "at": "2026-08-05 10:30:00",
+            "date": "2026-08-05",
+        },
+        {
+            "code": "as:600641:1h",
+            "strategy": "xd3_prevlow",
+            "signal": "NOT_BUY",
+            "at": "2026.08.05 10:30",
+            "date": "2026-08-05",
+        },
+        {
+            "code": "as:600641:1h",
+            "strategy": "xd3_prevlow",
+            "signal": "BUY",
+            "at": "2026-08-05 11:30",
+            "date": "2026-08-05",
+        },
+        {
+            "code": "as:600641:1h",
+            "strategy": "other",
+            "signal": "BUY",
+            "at": "2026-08-05 10:30",
+            "date": "2026-08-05",
+        },
+        {
+            "code": "as:600641:1h",
+            "strategy": "xd3_prevlow",
+            "signal": "IGNORE_BUY",
+            "at": "2026-08-05 10:30",
+            "date": "2026-08-05",
+        },
+    ]
+    assert saved_trade_marks(trade, library) == ["PICK", "BAN"]
+    assert saved_trade_marks({**trade, "at": "2026-08-05 14:30"}, library) == []
+    sell = {**trade, "signal": "SELL", "at": "2026-08-06 10:30"}
+    assert saved_trade_marks(sell, library) == []
+
+
 def test_parse_case_when_accepts_dotted_clock():
     from datetime import datetime
 
