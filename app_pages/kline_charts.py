@@ -214,6 +214,34 @@ def extract_symbol_data(
     return _prepare_kline_frame(raw)
 
 
+def extract_all_symbols(df: pd.DataFrame) -> dict[tuple[str, str], tuple[pd.DataFrame, dict]]:
+    """混表一次 groupby 切分全部 (exchange, symbol) 组并解析。
+
+    循环调用 extract_symbol_data 是 O(symbols × rows)：每次调用 df.copy()
+    全表拷贝再过滤，60 symbols × 12 万行的组要重复扫 60 遍。本函数按
+    (exchange, symbol) 分组一次切分，逐组 _prepare_kline_frame。
+    返回 {(exchange_lower, symbol_lower): (prepared, meta)}。
+    """
+    if df is None or df.empty:
+        return {}
+    if "symbol" not in df.columns:
+        return {}
+    sym_keys = df["symbol"].astype(str).str.lower()
+    if "exchange" in df.columns:
+        group_keys = df["exchange"].astype(str).str.lower() + ":" + sym_keys
+    else:
+        group_keys = sym_keys
+    has_exchange = "exchange" in df.columns
+    out: dict[tuple[str, str], tuple[pd.DataFrame, dict]] = {}
+    for gkey, sub in df.groupby(group_keys, sort=False):
+        prepared = _prepare_kline_frame(sub)
+        if prepared is None:
+            continue
+        exch, sym = gkey.split(":", 1) if has_exchange else ("", gkey)
+        out[(exch, sym)] = prepared
+    return out
+
+
 # ===========================================================
 # ECharts 数据转换
 # ===========================================================
