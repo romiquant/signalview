@@ -6,12 +6,13 @@ MA 与 MACD 直接复用 flight 返回的预计算列（ma5/ma10/dif/dea/macd）
 from __future__ import annotations
 
 import math
+from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 import streamlit as st
 
 from app_pages._signal_lab_data import parse_code
-from app_pages.kline_charts import extract_symbol_data
+from app_pages.kline_charts import extract_all_symbols
 from flight_kline_client import build_kline_tags, fetch_kline_dataframe
 
 # K线窗口（缩略图与详情大图共用同一语义，详情经 t.WINDOW_* 引用自动同步）
@@ -83,8 +84,43 @@ def anchor_timestamp(window: pd.DataFrame | None, date: str, at: str = "") -> pd
     return pd.Timestamp(pool.loc[(pool["_x"] - target).abs().idxmin(), "_x"])
 
 
+def _fetch_group_bars(
+    ex: str, freq: str, items: list[tuple[str, str]]
+) -> dict[str, pd.DataFrame]:
+    """拉取单个 (exchange, freq) 组的 K 线并按 symbol 切分，失败返回空 dict。"""
+    syms = [s for s, _ in items]
+    dates = [pd.Timestamp(d) for _, d in items]
+    lookback = FREQ_LOOKBACK_DAYS.get(freq, _DEFAULT_LOOKBACK_DAYS)
+    start_ms = int((min(dates) - pd.Timedelta(days=lookback)).value // 1e6)
+    end_ms = int((max(dates) + pd.Timedelta(days=FREQ_FORWARD_DAYS.get(freq, _DEFAULT_FORWARD_DAYS))).value // 1e6)
+    tag_freq = DERIVED_FREQS.get(freq, freq)
+    try:
+        tags = build_kline_tags(syms, ex, kline_freq=tag_freq)
+        df = fetch_kline_dataframe(
+            tags, start_ms, end_ms,
+            kline_aggregate=freq if freq in DERIVED_FREQS else "",
+        )
+    except Exception as e:
+        print(f"[SignalLabThumbs] fetch failed for ({ex}, {freq}): {e}")
+        return {}
+    if df is None:
+        return {}
+    all_parsed = extract_all_symbols(df)
+    out: dict[str, pd.DataFrame] = {}
+    for sym, _d in items:
+        parsed = all_parsed.get((ex.lower(), sym.lower()))
+        if parsed is not None:
+            out[f"{ex}:{sym}:{freq}"] = parsed[0]
+    return out
+
+
 def fetch_case_bars(code_dates: dict[str, str]) -> dict[str, pd.DataFrame]:
-    """批量拉取 {code: 案例日期} 的 K 线；返回 {code: bars}，失败的不出现。"""
+    """批量拉取 {code: 案例日期} 的 K 线；返回 {code: bars}，失败的不出现。
+
+    组间并发：qdata 后端（CH Flight）单组大窗口扫描 0.1–0.9s，串行 22 组
+    ~3.4s；并发后总耗时 = 最慢组 ≈ 1.0s。CH 侧 5G 内存顶支持 ~4 组并发
+    （单查询峰值 ~2.8G），并发上限保守取 8 避免触顶互杀。
+    """
     groups: dict[tuple[str, str], list[tuple[str, str]]] = {}
     for code, d in code_dates.items():
         parsed = parse_code(code)
@@ -92,29 +128,16 @@ def fetch_case_bars(code_dates: dict[str, str]) -> dict[str, pd.DataFrame]:
             ex, sym, freq = parsed
             groups.setdefault((ex, freq), []).append((sym, d))
 
+    results: list[dict[str, pd.DataFrame]] = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(_fetch_group_bars, ex, freq, items)
+                   for (ex, freq), items in groups.items()]
+        for fut in futures:
+            results.append(fut.result())
+
     out: dict[str, pd.DataFrame] = {}
-    for (ex, freq), items in groups.items():
-        syms = [s for s, _ in items]
-        dates = [pd.Timestamp(d) for _, d in items]
-        lookback = FREQ_LOOKBACK_DAYS.get(freq, _DEFAULT_LOOKBACK_DAYS)
-        start_ms = int((min(dates) - pd.Timedelta(days=lookback)).value // 1e6)
-        end_ms = int((max(dates) + pd.Timedelta(days=FREQ_FORWARD_DAYS.get(freq, _DEFAULT_FORWARD_DAYS))).value // 1e6)
-        tag_freq = DERIVED_FREQS.get(freq, freq)
-        try:
-            tags = build_kline_tags(syms, ex, kline_freq=tag_freq)
-            df = fetch_kline_dataframe(
-                tags, start_ms, end_ms,
-                kline_aggregate=freq if freq in DERIVED_FREQS else "",
-            )
-        except Exception as e:
-            print(f"[SignalLabThumbs] fetch failed for ({ex}, {freq}): {e}")
-            continue
-        if df is None:
-            continue
-        for sym, d in items:
-            parsed = extract_symbol_data(df, sym, exchange=ex)
-            if parsed is not None:
-                out[f"{ex}:{sym}:{freq}"] = parsed[0]
+    for r in results:
+        out.update(r)
     return out
 
 
